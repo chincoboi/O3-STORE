@@ -1,0 +1,6 @@
+{
+  "name": "O3 Varieties - Inventory & Accountability System",
+  "description": "Production inventory, point-of-sale, stock accountability, damage reporting, and financial reconciliation system for O3 Varieties clothing store in Nigeria.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
