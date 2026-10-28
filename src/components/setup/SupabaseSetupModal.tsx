@@ -318,12 +318,20 @@ export const SupabaseSetupModal: React.FC<SupabaseSetupModalProps> = ({
                 Migration 005 adds unique <code>section_code</code> identifiers (e.g. <code>SEC-001</code>, <code>SEC-009</code>) to prevent name collision and ensure distinct identification across duplicate section names.
               </p>
 
+              <div className="flex items-center justify-between text-xs pt-2">
+                <span className="font-mono text-slate-600 font-semibold">5. /supabase/migrations/006_damage_reporting_and_resolution.sql</span>
+              </div>
+              <p className="text-xs text-slate-500">
+                Migration 006 provisions private Supabase Storage (<code>damage-evidence</code> bucket), adds atomic damage reporting (<code>submit_damage_report_atomic</code>), stock reservation, database-level <code>super_admin</code> approval/rejection (<code>review_damage_report_atomic</code>), and immutable audit logs.
+              </p>
+
               <div className="p-3 bg-slate-900 text-slate-200 text-[11px] font-mono rounded-lg max-h-48 overflow-y-auto leading-relaxed border border-slate-800">
                 -- O3 VARIETIES INVENTORY &amp; ACCOUNTABILITY SYSTEM<br />
                 -- Migration 001: Initial Core Schema, RLS, Enums<br />
                 -- Migration 002: Atomic Bale Allocation &amp; Stock Balance Views<br />
                 -- Migration 004: Atomic POS Sales Processing, Split Payments &amp; Idempotency<br />
                 -- Migration 005: Section Codes &amp; Unique Identifiers<br />
+                -- Migration 006: Damage Reporting, Private Storage, Stock Reservation &amp; Review<br />
                 -- Run migration files sequentially in your Supabase SQL Editor.<br />
               </div>
             </div>

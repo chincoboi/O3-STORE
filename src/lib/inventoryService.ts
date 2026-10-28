@@ -45,31 +45,25 @@ class InventoryStore {
       // Ensure unique section code exists
       const code = section.section_code || `SEC-${String(idx + 1).padStart(3, '0')}`;
 
-      // Check if this section has movements or damage reports in local ledger
-      const hasMovements = this.movements.some((m) => m.section_id === section.id);
-      const hasDamages = this.damageReports.some((d) => d.section_id === section.id && d.status === 'pending');
-
-      // If no local ledger records exist for this section, preserve existing positive balance from server/preset
-      if (!hasMovements && !hasDamages && (section.available_stock > 0 || section.physical_stock > 0)) {
-        return {
-          ...section,
-          section_code: code,
-          is_active: section.is_active ?? true,
-        };
-      }
-
       // Sum all physical quantity changes from ledger
-      const physical = this.movements
+      const hasMovements = this.movements.some((m) => m.section_id === section.id);
+      const ledgerSum = this.movements
         .filter((m) => m.section_id === section.id)
         .reduce((sum, m) => sum + m.quantity_change, 0);
 
-      // Sum pending damage reservations
+      // Sum pending damage reservations (only status === 'pending' actively holds stock from sale)
       const reserved = this.damageReports
         .filter((d) => d.section_id === section.id && d.status === 'pending')
         .reduce((sum, d) => sum + d.quantity, 0);
 
-      // Guard against negative stock
-      const safePhysical = Math.max(0, physical);
+      // Sum approved damaged write-offs
+      const approvedDamage = this.damageReports
+        .filter((d) => d.section_id === section.id && d.status === 'approved')
+        .reduce((sum, d) => sum + d.quantity, 0);
+
+      const totalDamaged = reserved + approvedDamage;
+
+      const safePhysical = hasMovements ? Math.max(0, ledgerSum) : Math.max(0, section.physical_stock || 0);
       const safeReserved = Math.max(0, reserved);
       const available = Math.max(0, safePhysical - safeReserved);
 
@@ -78,10 +72,19 @@ class InventoryStore {
         section_code: code,
         physical_stock: safePhysical,
         reserved_stock: safeReserved,
+        approved_damage_stock: approvedDamage,
+        total_damaged_stock: totalDamaged,
         available_stock: available,
         is_active: section.is_active ?? true,
       };
     });
+    notifyInventoryUpdated();
+  }
+}
+
+export function notifyInventoryUpdated() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('o3:inventory_updated'));
   }
 }
 
@@ -201,7 +204,7 @@ export async function getStockSections(): Promise<{ success: boolean; data: Stoc
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (!viewError && viewData) {
+      if (!viewError && viewData && viewData.length > 0) {
         const enriched = enrichSectionCodes(viewData as StockSection[]);
         localInventoryStore.sections = enriched;
         return { success: true, data: enriched };
@@ -214,34 +217,42 @@ export async function getStockSections(): Promise<{ success: boolean; data: Stoc
         .order('created_at', { ascending: false });
       if (error) throw error;
 
-      // Compute balances from inventory_movements & damage_reports
-      const { data: movements } = await client.from('inventory_movements').select('section_id, quantity_change');
-      const { data: damage } = await client.from('damage_reports').select('section_id, quantity').eq('status', 'pending');
+      if (data && data.length > 0) {
+        // Compute balances from inventory_movements & damage_reports
+        const { data: movements } = await client.from('inventory_movements').select('section_id, quantity_change');
+        const { data: allDamage } = await client.from('damage_reports').select('section_id, quantity, status');
 
-      const computedWithCodes = enrichSectionCodes(data as StockSection[]);
-      const computed = computedWithCodes.map((sec) => {
-        const physical = (movements || [])
-          .filter((m) => m.section_id === sec.id)
-          .reduce((acc, m) => acc + (m.quantity_change || 0), 0);
-        const reserved = (damage || [])
-          .filter((d) => d.section_id === sec.id)
-          .reduce((acc, d) => acc + (d.quantity || 0), 0);
+        const computedWithCodes = enrichSectionCodes(data as StockSection[]);
+        const computed = computedWithCodes.map((sec) => {
+          const physical = (movements || [])
+            .filter((m) => m.section_id === sec.id)
+            .reduce((acc, m) => acc + (m.quantity_change || 0), 0);
+          const reserved = (allDamage || [])
+            .filter((d) => d.section_id === sec.id && d.status === 'pending')
+            .reduce((acc, d) => acc + (d.quantity || 0), 0);
+          const approved = (allDamage || [])
+            .filter((d) => d.section_id === sec.id && d.status === 'approved')
+            .reduce((acc, d) => acc + (d.quantity || 0), 0);
+          const totalDamaged = reserved + approved;
 
-        return {
-          ...sec,
-          physical_stock: Math.max(0, physical),
-          reserved_stock: Math.max(0, reserved),
-          available_stock: Math.max(0, physical - reserved),
-        };
-      });
+          return {
+            ...sec,
+            physical_stock: Math.max(0, physical),
+            reserved_stock: Math.max(0, reserved),
+            approved_damage_stock: approved,
+            total_damaged_stock: totalDamaged,
+            available_stock: Math.max(0, physical - reserved),
+          };
+        });
 
-      const sortedComputed = [...computed].sort(
-        (a, b) => new Date(b.created_at || '').getTime() - new Date(a.created_at || '').getTime()
-      );
-      localInventoryStore.sections = sortedComputed;
-      return { success: true, data: sortedComputed };
+        const sortedComputed = [...computed].sort(
+          (a, b) => new Date(b.created_at || '').getTime() - new Date(a.created_at || '').getTime()
+        );
+        localInventoryStore.sections = sortedComputed;
+        return { success: true, data: sortedComputed };
+      }
     } catch (err: unknown) {
-      console.warn('Supabase section query failed, using local store:', err);
+      console.warn('Supabase section query failed, using local store:', extractErrorMessage(err));
     }
   }
 

@@ -474,16 +474,22 @@ CREATE POLICY "Authenticated can insert audit logs"
   TO authenticated
   WITH CHECK (auth.uid() = actor_id);
 
--- 20. SEED INITIAL SAMPLE DATA (Can be executed safely)
--- Insert standard initial clothing sections for O3 Varieties
+-- 20. SEED INITIAL SAMPLE DATA (Can be executed safely without requiring ON CONFLICT constraint)
+-- Insert standard initial clothing sections for O3 Varieties if they do not already exist
 INSERT INTO public.stock_sections (name, category, selling_price_kobo, low_stock_threshold)
-VALUES
-  ('Men''s Corporate Shirts', 'Men', 450000, 10),
-  ('Men''s Chinos & Jeans', 'Men', 600000, 10),
-  ('Men''s Round Neck / Polos', 'Men', 350000, 12),
-  ('Women''s Chiffon & Silk Tops', 'Women', 400000, 15),
-  ('Women''s Denim Trousers', 'Women', 550000, 10),
-  ('Vintage & Corporate Dresses', 'Women', 750000, 8),
-  ('Women''s Skirts', 'Women', 350000, 10),
-  ('Children''s Variety Wear', 'Children', 250000, 15)
-ON CONFLICT (name) DO NOTHING;
+SELECT s.name, s.category, s.selling_price_kobo, s.low_stock_threshold
+FROM (
+  VALUES
+    ('Men''s Corporate Shirts', 'Men', 450000, 10),
+    ('Men''s Chinos & Jeans', 'Men', 600000, 10),
+    ('Men''s Round Neck / Polos', 'Men', 350000, 12),
+    ('Women''s Chiffon & Silk Tops', 'Women', 400000, 15),
+    ('Women''s Denim Trousers', 'Women', 550000, 10),
+    ('Vintage & Corporate Dresses', 'Women', 750000, 8),
+    ('Women''s Skirts', 'Women', 350000, 10),
+    ('Children''s Variety Wear', 'Children', 250000, 15)
+) AS s(name, category, selling_price_kobo, low_stock_threshold)
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.stock_sections existing WHERE existing.name = s.name
+);
+

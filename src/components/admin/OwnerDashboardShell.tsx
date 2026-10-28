@@ -8,6 +8,7 @@ import {
   DollarSign,
   Users,
   Shield,
+  ShieldCheck,
   Layers,
   ArrowUpRight,
   Database,
@@ -43,10 +44,14 @@ import { SectionFormModal } from './SectionFormModal';
 import { StockReceiptHistory } from './StockReceiptHistory';
 import { getStockSections, getStockBatches } from '../../lib/inventoryService';
 import { getSalesHistory } from '../../lib/salesService';
-import { Sale } from '../../types/database';
+import { Sale, AuditLog } from '../../types/database';
 import { ReceiptModal } from '../pos/ReceiptModal';
 import { SaleCancellationModal } from '../pos/SaleCancellationModal';
-import { Eye, RotateCcw, Search as SearchIcon } from 'lucide-react';
+import { Eye, RotateCcw, Search as SearchIcon, Image as ImageIcon } from 'lucide-react';
+import { getDamageReports, reviewDamageReport, getAuditLogs } from '../../lib/damageService';
+import { DamageReportModal } from '../staff/DamageReportModal';
+import { DamageRejectionModal } from './DamageRejectionModal';
+import { PhotoViewerModal } from '../common/PhotoViewerModal';
 
 export const OwnerDashboardShell: React.FC = () => {
   const { user, profile, isDemoMode, setIsSetupModalOpen } = useAuth();
@@ -65,6 +70,21 @@ export const OwnerDashboardShell: React.FC = () => {
   const [salesPaymentFilter, setSalesPaymentFilter] = useState<string>('all');
   const [salesSearchTerm, setSalesSearchTerm] = useState<string>('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Phase 4 Damage Review State
+  const [damageFilterStatus, setDamageFilterStatus] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+  const [damageSectionFilter, setDamageSectionFilter] = useState<string>('all');
+  const [damageSearchTerm, setDamageSearchTerm] = useState<string>('');
+  const [reportToReject, setReportToReject] = useState<DamageReport | null>(null);
+  const [reportToApproveConfirm, setReportToApproveConfirm] = useState<DamageReport | null>(null);
+  const [isOwnerDamageModalOpen, setIsOwnerDamageModalOpen] = useState<boolean>(false);
+  const [auditLogsList, setAuditLogsList] = useState<AuditLog[]>([]);
+  const [photoViewerState, setPhotoViewerState] = useState<{
+    isOpen: boolean;
+    url?: string | null;
+    title?: string;
+    subtitle?: string;
+  }>({ isOpen: false });
 
   // Modals state
   const [isRegisterBaleOpen, setIsRegisterBaleOpen] = useState(false);
@@ -89,10 +109,23 @@ export const OwnerDashboardShell: React.FC = () => {
     if (salesRes.success && salesRes.data) {
       setSales(salesRes.data);
     }
+    const dmgRes = await getDamageReports();
+    if (dmgRes.success && dmgRes.data) {
+      setDamageReports(dmgRes.data);
+    }
+    const logs = await getAuditLogs();
+    setAuditLogsList(logs);
   };
 
   useEffect(() => {
     reloadInventory();
+    const handleSync = () => {
+      reloadInventory();
+    };
+    window.addEventListener('o3:inventory_updated', handleSync);
+    return () => {
+      window.removeEventListener('o3:inventory_updated', handleSync);
+    };
   }, []);
 
   const showToast = (msg: string) => {
@@ -156,81 +189,70 @@ export const OwnerDashboardShell: React.FC = () => {
     return Array.from(map.values());
   }, [sales]);
 
-  // Damage Approval Handler (Simulated in Phase 1 demo shell)
-  const handleApproveDamage = (reportId: string) => {
-    const report = damageReports.find((r) => r.id === reportId);
-    if (!report) return;
-
-    setDamageReports((prev) =>
-      prev.map((r) =>
-        r.id === reportId
-          ? {
-              ...r,
-              status: 'approved',
-              reviewed_by: DEMO_OWNER.id,
-              reviewer_name: DEMO_OWNER.full_name,
-              reviewed_at: new Date().toISOString(),
-            }
-          : r
-      )
+  // Phase 4: Atomic Damage Approval & Rejection Handlers
+  const handleApproveDamage = async (reportId: string) => {
+    const res = await reviewDamageReport(
+      {
+        report_id: reportId,
+        actor_id: profile?.id || DEMO_OWNER.id,
+        actor_role: profile?.role || 'super_admin',
+        actor_name: profile?.full_name || DEMO_OWNER.full_name,
+        action: 'approve',
+      },
+      profile || DEMO_OWNER
     );
 
-    // Approved damage deducts physical stock exactly once and releases reservation
-    setSections((prev) =>
-      prev.map((s) => {
-        if (s.id === report.section_id) {
-          const newPhysical = Math.max(0, s.physical_stock - report.quantity);
-          const newReserved = Math.max(0, s.reserved_stock - report.quantity);
-          return {
-            ...s,
-            physical_stock: newPhysical,
-            reserved_stock: newReserved,
-            available_stock: newPhysical - newReserved,
-          };
-        }
-        return s;
-      })
-    );
-
-    showToast(`Damage Report #${reportId} APPROVED. ${report.quantity} item(s) deducted from physical inventory.`);
+    if (res.success && res.data) {
+      showToast(`Damage Report #${reportId} APPROVED. ${res.data.quantity} item(s) permanently deducted from physical inventory.`);
+      setReportToApproveConfirm(null);
+      reloadInventory();
+    } else {
+      showToast(`Approval failed: ${res.error || 'Unknown error'}`);
+    }
   };
 
-  const handleRejectDamage = (reportId: string) => {
-    const report = damageReports.find((r) => r.id === reportId);
-    if (!report) return;
-
-    setDamageReports((prev) =>
-      prev.map((r) =>
-        r.id === reportId
-          ? {
-              ...r,
-              status: 'rejected',
-              rejection_reason: 'Item verified cleanable / repaired on site',
-              reviewed_by: DEMO_OWNER.id,
-              reviewer_name: DEMO_OWNER.full_name,
-              reviewed_at: new Date().toISOString(),
-            }
-          : r
-      )
+  const handleConfirmRejection = async (reportId: string, reason: string) => {
+    const res = await reviewDamageReport(
+      {
+        report_id: reportId,
+        actor_id: profile?.id || DEMO_OWNER.id,
+        actor_role: profile?.role || 'super_admin',
+        actor_name: profile?.full_name || DEMO_OWNER.full_name,
+        action: 'reject',
+        rejection_reason: reason,
+      },
+      profile || DEMO_OWNER
     );
 
-    // Rejected damage releases reservation back to sale availability
-    setSections((prev) =>
-      prev.map((s) => {
-        if (s.id === report.section_id) {
-          const newReserved = Math.max(0, s.reserved_stock - report.quantity);
-          return {
-            ...s,
-            reserved_stock: newReserved,
-            available_stock: s.physical_stock - newReserved,
-          };
-        }
-        return s;
-      })
-    );
-
-    showToast(`Damage Report #${reportId} REJECTED. Reserved stock released back to sales availability.`);
+    if (res.success && res.data) {
+      showToast(`Damage Report #${reportId} REJECTED. ${res.data.quantity} piece(s) released back to sale availability.`);
+      setReportToReject(null);
+      reloadInventory();
+    } else {
+      throw new Error(res.error || 'Failed to reject damage report.');
+    }
   };
+
+  // Phase 4: Filtered damage reports
+  const filteredDamageReports = damageReports
+    .filter((report) => {
+      if (damageFilterStatus !== 'all' && report.status !== damageFilterStatus) {
+        return false;
+      }
+      if (damageSectionFilter !== 'all' && report.section_id !== damageSectionFilter) {
+        return false;
+      }
+      if (damageSearchTerm.trim()) {
+        const term = damageSearchTerm.toLowerCase();
+        const matchesSection = report.section_name.toLowerCase().includes(term);
+        const matchesStaff = (report.staff_name || '').toLowerCase().includes(term);
+        const matchesDesc = report.description.toLowerCase().includes(term);
+        const matchesType = report.damage_type.toLowerCase().includes(term);
+        return matchesSection || matchesStaff || matchesDesc || matchesType;
+      }
+      return true;
+    })
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   // Always sort sections newest to oldest so newly registered goods/products appear on top
   const filteredSections = (
@@ -1280,97 +1302,233 @@ export const OwnerDashboardShell: React.FC = () => {
           </div>
         )}
 
-        {/* TAB 4: DAMAGE APPROVALS */}
+        {/* TAB 4: DAMAGE APPROVALS (Phase 4) */}
         {activeTab === 'damage' && (
           <div className="space-y-4">
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
-              <h3 className="text-base font-bold text-slate-900">Damage Submissions Review</h3>
-              <p className="text-xs text-slate-500 mt-1">
-                When staff submit damage reports, inventory is automatically <strong>reserved</strong> from sales availability. Approving deducts physical stock permanently. Rejecting releases the stock back for sale.
-              </p>
+            {/* Header Banner */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-rose-600" />
+                  <h3 className="text-base font-bold text-slate-900">
+                    Damage Submissions &amp; Stock Reservation Review
+                  </h3>
+                  <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                    Phase 4 Super Admin Control
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Pending damages are <strong>reserved from POS availability</strong> without reducing physical stock. <strong>Approving</strong> permanently deducts physical stock. <strong>Rejecting</strong> requires a mandatory reason and releases reserved stock back to sales.
+                </p>
+              </div>
+
+              <button
+                onClick={() => setIsOwnerDamageModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#0B193C] hover:bg-[#14285D] text-white text-xs font-bold rounded-lg transition shadow-xs cursor-pointer shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Report Damage as Owner</span>
+              </button>
             </div>
 
-            <div className="space-y-3">
-              {sortedDamageReports.map((report) => (
-                <div
-                  key={report.id}
-                  className={`p-5 rounded-xl border bg-white shadow-xs transition ${
-                    report.status === 'pending'
-                      ? 'border-amber-300'
-                      : report.status === 'approved'
-                      ? 'border-slate-200 opacity-90'
-                      : 'border-slate-200 opacity-80'
-                  }`}
+            {/* Filter & Search Bar */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {(['all', 'pending', 'approved', 'rejected'] as const).map((st) => {
+                  const count =
+                    st === 'all'
+                      ? damageReports.length
+                      : damageReports.filter((d) => d.status === st).length;
+                  return (
+                    <button
+                      key={st}
+                      onClick={() => setDamageFilterStatus(st)}
+                      className={`text-xs px-3 py-1.5 rounded-lg font-semibold transition cursor-pointer capitalize ${
+                        damageFilterStatus === st
+                          ? 'bg-[#0B193C] text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {st} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={damageSectionFilter}
+                  onChange={(e) => setDamageSectionFilter(e.target.value)}
+                  className="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white text-slate-700 font-medium outline-none"
                 >
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs ${
-                          report.status === 'pending'
-                            ? 'bg-amber-100 text-amber-800'
-                            : report.status === 'approved'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-rose-100 text-rose-800'
-                        }`}
-                      >
-                        {report.quantity}x
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h4 className="text-sm font-bold text-slate-900">{report.section_name}</h4>
-                          <span className="uppercase text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
-                            {report.damage_type}
-                          </span>
+                  <option value="all">All Clothing Sections</option>
+                  {sections.map((sec) => (
+                    <option key={sec.id} value={sec.id}>
+                      {sec.name} {sec.section_code ? `[${sec.section_code}]` : ''}
+                    </option>
+                  ))}
+                </select>
+
+                <div className="relative">
+                  <SearchIcon className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search damages..."
+                    value={damageSearchTerm}
+                    onChange={(e) => setDamageSearchTerm(e.target.value)}
+                    className="pl-8 pr-3 py-1.5 text-xs border border-slate-300 rounded-lg outline-none focus:ring-1 focus:ring-[#0B193C] w-48"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Damage Reports List */}
+            <div className="space-y-3">
+              {filteredDamageReports.length === 0 ? (
+                <div className="bg-white p-12 text-center rounded-xl border border-slate-200 shadow-xs">
+                  <CheckCircle2 className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                  <h4 className="text-sm font-bold text-slate-700">No damage reports found</h4>
+                  <p className="text-xs text-slate-500 mt-1">
+                    No submissions match the selected status or search filter.
+                  </p>
+                </div>
+              ) : (
+                filteredDamageReports.map((report) => (
+                  <div
+                    key={report.id}
+                    className={`p-5 rounded-xl border bg-white shadow-xs transition ${
+                      report.status === 'pending'
+                        ? 'border-amber-300 ring-1 ring-amber-200/50'
+                        : report.status === 'approved'
+                        ? 'border-slate-200'
+                        : 'border-slate-200'
+                    }`}
+                  >
+                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                      {/* Left: Info */}
+                      <div className="flex items-start gap-3">
+                        <div
+                          className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
+                            report.status === 'pending'
+                              ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                              : report.status === 'approved'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : 'bg-rose-100 text-rose-800 border border-rose-200'
+                          }`}
+                        >
+                          {report.quantity}x
                         </div>
-                        <p className="text-xs text-slate-600 mt-0.5">{report.description}</p>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-sm font-bold text-slate-900">{report.section_name}</h4>
+                            {report.section_code && (
+                              <span className="font-mono text-[10px] font-extrabold bg-blue-50 text-blue-800 border border-blue-200 px-1.5 py-0.5 rounded shrink-0">
+                                {report.section_code}
+                              </span>
+                            )}
+                            <span className="uppercase text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                              {report.damage_type}
+                            </span>
+                            <span
+                              className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase ${
+                                report.status === 'pending'
+                                  ? 'bg-amber-100 text-amber-900 border border-amber-200'
+                                  : report.status === 'approved'
+                                  ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+                                  : 'bg-rose-100 text-rose-900 border border-rose-200'
+                              }`}
+                            >
+                              {report.status === 'pending'
+                                ? 'Pending Reservation'
+                                : report.status === 'approved'
+                                ? 'Approved & Deducted'
+                                : 'Rejected & Released'}
+                            </span>
+                          </div>
+
+                          <p className="text-xs text-slate-700 mt-1 leading-relaxed">
+                            {report.description}
+                          </p>
+
+                          {/* Photo Evidence button */}
+                          {(report.photo_url || report.photo_storage_path) && (
+                            <div className="mt-2.5">
+                              <button
+                                onClick={() =>
+                                  setPhotoViewerState({
+                                    isOpen: true,
+                                    url: report.photo_url || report.photo_storage_path,
+                                    title: `Damage Evidence: ${report.section_name} (${report.damage_type.toUpperCase()})`,
+                                    subtitle: `Reported by ${report.staff_name} &bull; ${report.quantity} piece(s) reserved`,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 transition cursor-pointer"
+                              >
+                                <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
+                                <span>Inspect Photo Evidence</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right: Actions / Status */}
+                      <div className="flex items-center gap-2 self-start shrink-0">
+                        {report.status === 'pending' ? (
+                          <>
+                            <button
+                              onClick={() => setReportToReject(report)}
+                              className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold rounded-lg border border-rose-200 transition cursor-pointer"
+                            >
+                              Reject &amp; Release
+                            </button>
+                            <button
+                              onClick={() => setReportToApproveConfirm(report)}
+                              className="px-3.5 py-1.5 bg-[#0B193C] hover:bg-[#14285D] text-white text-xs font-bold rounded-lg transition shadow-xs cursor-pointer"
+                            >
+                              Approve &amp; Deduct
+                            </button>
+                          </>
+                        ) : (
+                          <div className="text-right">
+                            <span
+                              className={`text-xs font-bold px-2.5 py-1 rounded-full uppercase inline-block ${
+                                report.status === 'approved'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  : 'bg-rose-100 text-rose-800 border border-rose-200'
+                              }`}
+                            >
+                              {report.status}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      {report.status === 'pending' ? (
-                        <>
-                          <button
-                            onClick={() => handleRejectDamage(report.id)}
-                            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold rounded-lg border border-rose-200 transition"
-                          >
-                            Reject &amp; Release
-                          </button>
-                          <button
-                            onClick={() => handleApproveDamage(report.id)}
-                            className="px-3 py-1.5 bg-[#0B193C] hover:bg-[#14285D] text-white text-xs font-semibold rounded-lg transition"
-                          >
-                            Approve &amp; Deduct
-                          </button>
-                        </>
-                      ) : (
-                        <span
-                          className={`text-xs font-bold px-2.5 py-1 rounded-full uppercase ${
-                            report.status === 'approved'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-rose-100 text-rose-800'
-                          }`}
-                        >
-                          {report.status}
-                        </span>
+                    {/* Footer Audit Info */}
+                    <div className="mt-3.5 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between text-[11px] text-slate-500 gap-2">
+                      <div>
+                        Reported by <strong>{report.staff_name}</strong> on {formatDateTime(report.created_at)}
+                      </div>
+                      {report.reviewed_at && (
+                        <div className="text-slate-600">
+                          Reviewed by <strong>{report.reviewer_name}</strong> on {formatDateTime(report.reviewed_at)}
+                          {report.status === 'approved' && (
+                            <span className="ml-1 text-emerald-700 font-semibold">
+                              (Deducted {report.quantity} pcs from physical inventory)
+                            </span>
+                          )}
+                          {report.rejection_reason && (
+                            <span className="ml-1 text-rose-700 italic">
+                              (&quot;{report.rejection_reason}&quot;)
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
-
-                  <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between text-[11px] text-slate-500 gap-2">
-                    <div>
-                      Reported by <strong>{report.staff_name}</strong> on {formatDateTime(report.created_at)}
-                    </div>
-                    {report.reviewed_at && (
-                      <div className="text-slate-600">
-                        Decision by <strong>{report.reviewer_name}</strong> &bull; {formatDateTime(report.reviewed_at)}
-                        {report.rejection_reason && (
-                          <span className="ml-1 text-rose-700 italic">(&quot;{report.rejection_reason}&quot;)</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         )}
@@ -1539,6 +1697,78 @@ export const OwnerDashboardShell: React.FC = () => {
                 </tbody>
               </table>
             </div>
+
+            {/* Phase 4: Damage Approvals & Security Audit Trail */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+              <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                    <Shield className="w-4 h-4 text-emerald-600" />
+                    <span>Damage Approvals, Rejections &amp; Write-Off Audit Trail</span>
+                  </h4>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Immutable security log: every damage reservation, owner approval, and rejection reason is permanently tracked
+                  </p>
+                </div>
+                <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-100 text-slate-700 rounded-full border border-slate-200">
+                  {auditLogsList.length} events logged
+                </span>
+              </div>
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
+                    <th className="py-2.5 px-4">Timestamp</th>
+                    <th className="py-2.5 px-4">Action</th>
+                    <th className="py-2.5 px-4">Actor</th>
+                    <th className="py-2.5 px-4">Entity Ref</th>
+                    <th className="py-2.5 px-4">Decision / State Summary</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
+                  {auditLogsList.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-50">
+                      <td className="py-2.5 px-4 text-slate-600">{formatDateTime(log.created_at)}</td>
+                      <td className="py-2.5 px-4">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                            log.action === 'damage_approved'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : log.action === 'damage_rejected'
+                              ? 'bg-rose-100 text-rose-800'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {log.action}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-4 font-sans font-semibold text-slate-900">
+                        {log.actor_name || log.actor_id}
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-500 font-mono text-[10px]">
+                        {log.entity_id || '-'}
+                      </td>
+                      <td className="py-2.5 px-4 font-sans text-slate-600 text-xs">
+                        {log.after_state?.status === 'approved' && (
+                          <span className="text-emerald-700 font-medium">
+                            Approved &bull; Deducted {String(log.after_state.physical_deduction || '')} pcs from physical inventory
+                          </span>
+                        )}
+                        {log.after_state?.status === 'rejected' && (
+                          <span className="text-rose-700 font-medium">
+                            Rejected &bull; &quot;{String(log.after_state.rejection_reason || '')}&quot; &bull; Released {String(log.after_state.reservation_released || '')} pcs back to rack
+                          </span>
+                        )}
+                        {log.action === 'damage_reported' && (
+                          <span className="text-amber-800 font-medium">
+                            Reported &bull; Reserved {String(log.after_state?.reserved_now || '')} pcs of {String(log.after_state?.section_name || 'Section')}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
@@ -1654,6 +1884,84 @@ export const OwnerDashboardShell: React.FC = () => {
             );
             reloadInventory();
             setSelectedSaleForReceipt(updatedSale);
+          }}
+        />
+      )}
+
+      {/* PHASE 4 MODALS: Damage Rejection, Lightbox, Approval Confirmation & Owner Damage Filing */}
+      {reportToReject && (
+        <DamageRejectionModal
+          isOpen={Boolean(reportToReject)}
+          report={reportToReject}
+          onClose={() => setReportToReject(null)}
+          onConfirm={handleConfirmRejection}
+        />
+      )}
+
+      {/* Approval Confirmation Dialog */}
+      {reportToApproveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
+            <div className="flex items-center gap-3 text-slate-900 mb-3">
+              <div className="p-2.5 bg-emerald-100 text-emerald-800 rounded-xl">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold">Confirm Damage Write-Off Approval</h3>
+                <p className="text-xs text-slate-500">Atomic inventory deduction</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Are you sure you want to approve this damage report for{' '}
+              <strong className="text-slate-900">{reportToApproveConfirm.quantity} pc(s)</strong> of{' '}
+              <strong className="text-slate-900">{reportToApproveConfirm.section_name}</strong>?
+            </p>
+
+            <div className="mt-3 p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900">
+              <strong>Ledger Impact:</strong> This action will permanently deduct {reportToApproveConfirm.quantity} pieces from physical store inventory and create an immutable damage deduction entry in the audit ledger.
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setReportToApproveConfirm(null)}
+                className="px-4 py-2 border border-slate-300 text-slate-700 text-xs font-semibold rounded-xl hover:bg-slate-50 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApproveDamage(reportToApproveConfirm.id)}
+                className="px-5 py-2.5 bg-[#0B193C] hover:bg-[#14285D] text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-xs"
+              >
+                Confirm &amp; Deduct Physical Stock
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Photo Lightbox Modal */}
+      {photoViewerState.isOpen && (
+        <PhotoViewerModal
+          isOpen={photoViewerState.isOpen}
+          imageUrl={photoViewerState.url}
+          title={photoViewerState.title}
+          subtitle={photoViewerState.subtitle}
+          onClose={() => setPhotoViewerState({ isOpen: false })}
+        />
+      )}
+
+      {/* Owner Damage Filing Modal */}
+      {isOwnerDamageModalOpen && (
+        <DamageReportModal
+          isOpen={isOwnerDamageModalOpen}
+          onClose={() => setIsOwnerDamageModalOpen(false)}
+          sections={sections}
+          onSuccess={(newReport) => {
+            showToast(`Damage report created as Owner. ${newReport.quantity} piece(s) reserved.`);
+            reloadInventory();
           }}
         />
       )}

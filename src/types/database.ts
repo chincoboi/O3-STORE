@@ -36,7 +36,9 @@ export interface StockSection {
   low_stock_threshold: number;
   is_active: boolean;
   physical_stock: number; // Total physical items counted in store
-  reserved_stock: number; // Reserved due to pending damage reports
+  reserved_stock: number; // Reserved due to pending damage reports (deducted from available_stock)
+  approved_damage_stock?: number; // Total approved written-off damaged garments
+  total_damaged_stock?: number; // Total damaged garments across board (pending + approved)
   available_stock: number; // physical_stock - reserved_stock
   created_at: string;
   updated_at?: string;
@@ -149,6 +151,7 @@ export interface DamageReport {
   staff_id: string;
   staff_name?: string;
   section_id: string;
+  section_code?: string;
   section_name: string;
   quantity: number;
   damage_type: DamageType;
@@ -160,7 +163,38 @@ export interface DamageReport {
   reviewer_name?: string;
   reviewed_at?: string;
   rejection_reason?: string;
+  idempotency_key?: string;
+  reporter_role?: UserRole;
+  is_owner_report?: boolean;
   created_at: string;
+}
+
+export interface SubmitDamagePayload {
+  staff_id: string;
+  staff_name?: string;
+  reporter_role?: UserRole;
+  is_owner_report?: boolean;
+  section_id: string;
+  quantity: number;
+  damage_type: DamageType;
+  description: string;
+  photo_storage_path?: string;
+  photo_file?: File;
+  photo_url?: string;
+  idempotency_key?: string;
+}
+
+export interface ReviewDamagePayload {
+  report_id: string;
+  actor_id?: string;
+  actor_role?: UserRole;
+  actor_name?: string;
+  // Aliases for component and script compatibility
+  reviewer_id?: string;
+  reviewer_role?: UserRole;
+  reviewer_name?: string;
+  action: 'approve' | 'reject';
+  rejection_reason?: string;
 }
 
 export interface InventoryMovement {

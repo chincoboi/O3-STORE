@@ -6,6 +6,7 @@
 -- 1. VIEW: Real-time Section Stock Balances
 -- Accurately calculates physical stock from inventory_movements ledger
 -- and subtracts pending damage reservations to establish available stock.
+DROP VIEW IF EXISTS public.section_stock_balances CASCADE;
 CREATE OR REPLACE VIEW public.section_stock_balances AS
 WITH movement_totals AS (
   SELECT
@@ -39,7 +40,7 @@ LEFT JOIN movement_totals m ON s.id = m.section_id
 LEFT JOIN damage_reservations d ON s.id = d.section_id;
 
 -- Grant select on view
-GRANT SELECT ON public.section_stock_balances TO authenticated;
+GRANT SELECT ON public.section_stock_balances TO anon, authenticated;
 
 -- 2. FUNCTION: Atomic Bale Stock Allocation
 -- Allows the store owner to allocate sorted garments from a purchased bale into sections.
