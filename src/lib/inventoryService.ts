@@ -67,10 +67,15 @@ class InventoryStore {
       const safeReserved = Math.max(0, reserved);
       const available = Math.max(0, safePhysical - safeReserved);
 
+      // Total in-store physical stock (Sellable available + Approved damaged write-offs + Pending holds)
+      // Guarantees balanced equation: total_physical_stock = available_stock + approved_damage_stock + reserved_stock
+      const totalOnHand = available + approvedDamage + safeReserved;
+
       return {
         ...section,
         section_code: code,
         physical_stock: safePhysical,
+        total_physical_stock: totalOnHand,
         reserved_stock: safeReserved,
         approved_damage_stock: approvedDamage,
         total_damaged_stock: totalDamaged,
@@ -235,13 +240,17 @@ export async function getStockSections(): Promise<{ success: boolean; data: Stoc
             .reduce((acc, d) => acc + (d.quantity || 0), 0);
           const totalDamaged = reserved + approved;
 
+          const avail = Math.max(0, physical - reserved);
+          const totalOnHand = avail + approved + reserved;
+
           return {
             ...sec,
             physical_stock: Math.max(0, physical),
+            total_physical_stock: totalOnHand,
             reserved_stock: Math.max(0, reserved),
             approved_damage_stock: approved,
             total_damaged_stock: totalDamaged,
-            available_stock: Math.max(0, physical - reserved),
+            available_stock: avail,
           };
         });
 

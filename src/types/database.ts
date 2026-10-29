@@ -35,10 +35,12 @@ export interface StockSection {
   selling_price_kobo: number; // Stored in kobo (integer)
   low_stock_threshold: number;
   is_active: boolean;
-  physical_stock: number; // Total physical items counted in store
+  physical_stock: number; // Intact sellable physical stock after write-offs
+  total_physical_stock?: number; // Total physical intake/in-store stock (Available + Damaged)
   reserved_stock: number; // Reserved due to pending damage reports (deducted from available_stock)
   approved_damage_stock?: number; // Total approved written-off damaged garments
   total_damaged_stock?: number; // Total damaged garments across board (pending + approved)
+  sold_stock?: number; // Total sold pieces
   available_stock: number; // physical_stock - reserved_stock
   created_at: string;
   updated_at?: string;

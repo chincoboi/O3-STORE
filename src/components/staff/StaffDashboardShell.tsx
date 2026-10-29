@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   XCircle,
   Shield,
+  ShieldCheck,
   Bell,
 } from 'lucide-react';
 import { formatNaira, formatDateTime } from '../../lib/formatters';
@@ -98,7 +99,12 @@ export const StaffDashboardShell: React.FC = () => {
   const mySalesTodayKobo = sales.reduce((acc, s) => acc + s.total_kobo, 0);
   const totalAvailableStock = sections.reduce((acc, s) => acc + s.available_stock, 0);
   const totalPhysicalStock = sections.reduce((acc, s) => acc + s.physical_stock, 0);
-  const totalReservedStock = sections.reduce((acc, s) => acc + s.reserved_stock, 0);
+  const totalReservedStock = sections.reduce((acc, s) => acc + (s.reserved_stock || 0), 0);
+  const totalApprovedDamage = sections.reduce((acc, s) => acc + (s.approved_damage_stock || 0), 0);
+  const totalDamagedStock = sections.reduce(
+    (acc, s) => acc + (s.total_damaged_stock ?? ((s.reserved_stock || 0) + (s.approved_damage_stock || 0))),
+    0
+  );
 
   // Pending damages across store
   const storePendingDamageCount = damageReports.filter((d) => d.status === 'pending').length;
@@ -336,18 +342,19 @@ export const StaffDashboardShell: React.FC = () => {
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Store Damaged Holds
+                Store Damaged Clothes
               </span>
               <div className="p-2 bg-amber-50 text-amber-700 rounded-lg">
                 <AlertTriangle className="w-4 h-4" />
               </div>
             </div>
             <div className="mt-2 text-xl font-bold text-amber-700 tracking-tight">
-              {totalReservedStock}{' '}
-              <span className="text-xs font-normal text-slate-500">reserved pcs</span>
+              {totalDamagedStock}{' '}
+              <span className="text-xs font-normal text-slate-500">damaged pcs</span>
             </div>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              {storePendingDamageCount} pending report(s)
+              <span className="font-semibold text-amber-700">{totalReservedStock} pending review</span> &bull;{' '}
+              <span className="font-medium text-slate-600">{totalApprovedDamage} approved write-off</span>
               {ownerActiveDamages.length > 0 ? ` (${ownerActiveDamages.length} from Owner)` : ''}
             </p>
           </div>
@@ -398,6 +405,30 @@ export const StaffDashboardShell: React.FC = () => {
             </div>
           </div>
 
+          {/* Balanced Inventory Equation Info Bar */}
+          <div className="bg-slate-50/90 px-4 py-2.5 border-t sm:border-t-0 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2.5 text-[11px]">
+            <div className="flex items-center gap-2 text-slate-700">
+              <span className="font-bold text-slate-900 flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
+                Balanced Inventory:
+              </span>
+              <code className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200 font-bold text-blue-950">
+                Physical Total = Available For Sale + Damaged Clothes
+              </code>
+            </div>
+            <div className="text-slate-500 flex items-center gap-3 text-[10px]">
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Sound &amp; on Racks
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" /> Approved Damage
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> Pending Hold
+              </span>
+            </div>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
@@ -405,9 +436,9 @@ export const StaffDashboardShell: React.FC = () => {
                   <th className="py-3 px-4">Section Name</th>
                   <th className="py-3 px-4">Category</th>
                   <th className="py-3 px-4 text-right">Selling Price per Piece</th>
-                  <th className="py-3 px-4 text-center">Physical Stock</th>
-                  <th className="py-3 px-4 text-center">Reserved Damage</th>
-                  <th className="py-3 px-4 text-center font-bold text-slate-900">Available For Sale</th>
+                  <th className="py-3 px-4 text-center" title="Total physical stock = Available For Sale + Damaged Clothes">Physical Total</th>
+                  <th className="py-3 px-4 text-center" title="Approved damaged clothes + pending damage reservations">Damaged Clothes</th>
+                  <th className="py-3 px-4 text-center font-bold text-slate-900" title="Sound garments ready on display for customer purchase">Available For Sale</th>
                   <th className="py-3 px-4 text-center">Actions</th>
                 </tr>
               </thead>
@@ -432,16 +463,59 @@ export const StaffDashboardShell: React.FC = () => {
                     <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-900">
                       {formatNaira(sec.selling_price_kobo)}
                     </td>
-                    <td className="py-3.5 px-4 text-center text-slate-700">{sec.physical_stock}</td>
+                    <td className="py-3.5 px-4 text-center font-bold text-slate-800">
+                      {sec.total_physical_stock ?? (sec.available_stock + (sec.total_damaged_stock || (sec.approved_damage_stock || 0) + (sec.reserved_stock || 0)))}
+                    </td>
                     <td className="py-3.5 px-4 text-center">
-                      {sec.reserved_stock > 0 ? (
-                        <span className="text-amber-800 font-semibold bg-amber-50 px-2 py-0.5 rounded text-[10px] border border-amber-200 inline-flex items-center gap-1">
-                          <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
-                          <span>{sec.reserved_stock} reserved</span>
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">0</span>
-                      )}
+                      {(() => {
+                        const pending = sec.reserved_stock || 0;
+                        const approved = sec.approved_damage_stock || 0;
+                        const totalDamaged = sec.total_damaged_stock ?? (pending + approved);
+
+                        if (totalDamaged === 0) {
+                          return <span className="text-slate-400 font-medium">0</span>;
+                        }
+
+                        if (pending > 0 && approved > 0) {
+                          return (
+                            <div className="inline-flex flex-col items-center gap-1">
+                              <span className="font-extrabold text-slate-900 text-[11px]">
+                                {totalDamaged} damaged
+                              </span>
+                              <div className="flex items-center gap-1 text-[9px]">
+                                <span className="px-1.5 py-0.5 bg-rose-100 text-rose-800 font-bold rounded" title={`${approved} approved write-off`}>
+                                  {approved} approved
+                                </span>
+                                <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 font-semibold rounded" title={`${pending} pending reservation`}>
+                                  {pending} reserved
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        if (approved > 0) {
+                          return (
+                            <span
+                              className="px-2.5 py-1 bg-rose-50 text-rose-800 border border-rose-200 font-bold rounded-full text-[10px] inline-flex items-center gap-1"
+                              title={`${approved} garment(s) approved as damaged write-offs`}
+                            >
+                              <ShieldCheck className="w-3 h-3 text-rose-600 shrink-0" />
+                              <span>{approved} approved</span>
+                            </span>
+                          );
+                        }
+
+                        return (
+                          <span
+                            className="px-2 py-0.5 bg-amber-100 text-amber-800 font-semibold rounded-full text-[10px] inline-flex items-center gap-1"
+                            title={`${pending} garment(s) pending damage review`}
+                          >
+                            <AlertTriangle className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                            <span>{pending} reserved</span>
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="py-3.5 px-4 text-center">
                       <span

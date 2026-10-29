@@ -138,9 +138,17 @@ export const OwnerDashboardShell: React.FC = () => {
   const totalSalesTodayKobo = completedSales.reduce((acc, s) => acc + s.total_kobo, 0);
   const totalExpensesTodayKobo = DEMO_EXPENSES.reduce((acc, e) => acc + e.amount_kobo, 0);
   const pendingDamageCount = damageReports.filter((d) => d.status === 'pending').length;
-  const totalPhysicalStock = sections.reduce((acc, s) => acc + s.physical_stock, 0);
+  const totalPhysicalStock = sections.reduce(
+    (acc, s) => acc + (s.total_physical_stock ?? (s.available_stock + (s.total_damaged_stock || 0))),
+    0
+  );
   const totalAvailableStock = sections.reduce((acc, s) => acc + s.available_stock, 0);
-  const totalReservedStock = sections.reduce((acc, s) => acc + s.reserved_stock, 0);
+  const totalReservedStock = sections.reduce((acc, s) => acc + (s.reserved_stock || 0), 0);
+  const totalApprovedDamageStock = sections.reduce((acc, s) => acc + (s.approved_damage_stock || 0), 0);
+  const totalDamagedStock = sections.reduce(
+    (acc, s) => acc + (s.total_damaged_stock ?? ((s.reserved_stock || 0) + (s.approved_damage_stock || 0))),
+    0
+  );
   const lowStockSections = sections.filter((s) => s.available_stock <= s.low_stock_threshold);
 
   // Bale stats (Owner Only)
@@ -462,7 +470,11 @@ export const OwnerDashboardShell: React.FC = () => {
                   </div>
                   <div className="text-xs text-slate-500 mt-1">
                     <span className="font-semibold text-emerald-700">{totalAvailableStock} sellable</span> &bull;{' '}
-                    <span className="text-amber-700 font-medium">{totalReservedStock} reserved</span>
+                    <span className="text-amber-700 font-medium">
+                      {totalDamagedStock > 0
+                        ? `${totalDamagedStock} damaged (${totalReservedStock} reserved, ${totalApprovedDamageStock} approved)`
+                        : '0 damaged'}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -470,19 +482,20 @@ export const OwnerDashboardShell: React.FC = () => {
               <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                    Pending Damage Reviews
+                    Damaged Garments & Reviews
                   </span>
                   <div className="p-2 bg-rose-50 text-rose-700 rounded-lg">
                     <AlertTriangle className="w-4 h-4" />
                   </div>
                 </div>
                 <div className="mt-3">
-                  <div className="text-2xl font-bold text-slate-900 tracking-tight">
-                    {pendingDamageCount}{' '}
-                    <span className="text-sm font-normal text-slate-500">reports</span>
+                  <div className="text-2xl font-bold text-slate-900 tracking-tight flex items-baseline gap-2">
+                    <span>{totalDamagedStock}</span>
+                    <span className="text-sm font-normal text-slate-500">damaged pcs</span>
                   </div>
-                  <div className="text-xs text-rose-600 mt-1 font-medium">
-                    {pendingDamageCount > 0 ? 'Requires owner decision' : 'All clear'}
+                  <div className="text-xs text-slate-500 mt-1">
+                    <span className="font-semibold text-amber-700">{pendingDamageCount} pending ({totalReservedStock} pcs)</span> &bull;{' '}
+                    <span className="font-medium text-slate-600">{totalApprovedDamageStock} approved write-off</span>
                   </div>
                 </div>
               </div>
@@ -547,6 +560,30 @@ export const OwnerDashboardShell: React.FC = () => {
                 </button>
               </div>
 
+              {/* Balanced Inventory Equation Info Bar */}
+              <div className="bg-slate-50/90 px-5 py-2.5 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-3 text-[11px]">
+                <div className="flex items-center gap-2 text-slate-700">
+                  <span className="font-bold text-slate-900 flex items-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
+                    Balanced Inventory Equation:
+                  </span>
+                  <code className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200 font-bold text-blue-950">
+                    Physical Total = Available For Sale + Damaged Clothes
+                  </code>
+                </div>
+                <div className="text-slate-500 flex items-center gap-3">
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Sound &amp; on Display
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" /> Approved Damage
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> Pending Hold
+                  </span>
+                </div>
+              </div>
+
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
@@ -554,9 +591,9 @@ export const OwnerDashboardShell: React.FC = () => {
                       <th className="py-3 px-4">Section Name</th>
                       <th className="py-3 px-4">Category</th>
                       <th className="py-3 px-4 text-right">Unit Selling Price</th>
-                      <th className="py-3 px-4 text-center">Physical Total</th>
-                      <th className="py-3 px-4 text-center">Reserved (Damage)</th>
-                      <th className="py-3 px-4 text-center">Available For Sale</th>
+                      <th className="py-3 px-4 text-center" title="Total physical stock = Available For Sale + Damaged Clothes">Physical Total</th>
+                      <th className="py-3 px-4 text-center" title="Approved damaged clothes + pending damage reservations">Damaged Clothes</th>
+                      <th className="py-3 px-4 text-center font-bold text-slate-900" title="Sound garments ready on display for customer purchase">Available For Sale</th>
                       <th className="py-3 px-4 text-center">Status</th>
                     </tr>
                   </thead>
@@ -581,17 +618,59 @@ export const OwnerDashboardShell: React.FC = () => {
                         <td className="py-3 px-4 text-right font-mono font-medium text-slate-900">
                           {formatNaira(sec.selling_price_kobo)}
                         </td>
-                        <td className="py-3 px-4 text-center font-bold text-slate-800">
-                          {sec.physical_stock}
+                        <td className="py-3 px-4 text-center font-bold text-slate-900">
+                          {sec.total_physical_stock ?? (sec.available_stock + (sec.total_damaged_stock || (sec.approved_damage_stock || 0) + (sec.reserved_stock || 0)))}
                         </td>
                         <td className="py-3 px-4 text-center">
-                          {sec.reserved_stock > 0 ? (
-                            <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-semibold rounded-full text-[10px]">
-                              {sec.reserved_stock} reserved
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">0</span>
-                          )}
+                          {(() => {
+                            const pending = sec.reserved_stock || 0;
+                            const approved = sec.approved_damage_stock || 0;
+                            const totalDamaged = sec.total_damaged_stock ?? (pending + approved);
+
+                            if (totalDamaged === 0) {
+                              return <span className="text-slate-400 font-medium">0</span>;
+                            }
+
+                            if (pending > 0 && approved > 0) {
+                              return (
+                                <div className="inline-flex flex-col items-center gap-1">
+                                  <span className="font-extrabold text-slate-900 text-[11px]">
+                                    {totalDamaged} damaged
+                                  </span>
+                                  <div className="flex items-center gap-1 text-[9px]">
+                                    <span className="px-1.5 py-0.5 bg-rose-100 text-rose-800 font-bold rounded" title={`${approved} approved write-off`}>
+                                      {approved} approved
+                                    </span>
+                                    <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 font-semibold rounded" title={`${pending} pending reservation`}>
+                                      {pending} reserved
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            if (approved > 0) {
+                              return (
+                                <span
+                                  className="px-2.5 py-1 bg-rose-50 text-rose-800 border border-rose-200 font-bold rounded-full text-[10px] inline-flex items-center gap-1"
+                                  title={`${approved} garment(s) approved as damaged write-offs`}
+                                >
+                                  <ShieldCheck className="w-3 h-3 text-rose-600 shrink-0" />
+                                  <span>{approved} approved</span>
+                                </span>
+                              );
+                            }
+
+                            return (
+                              <span
+                                className="px-2 py-0.5 bg-amber-100 text-amber-800 font-semibold rounded-full text-[10px] inline-flex items-center gap-1"
+                                title={`${pending} garment(s) pending damage review`}
+                              >
+                                <AlertTriangle className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                                <span>{pending} reserved</span>
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td className="py-3 px-4 text-center">
                           <span
@@ -996,6 +1075,30 @@ export const OwnerDashboardShell: React.FC = () => {
             </div>
 
             <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+              {/* Balanced Inventory Equation Info Bar */}
+              <div className="bg-slate-50/90 px-5 py-2.5 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-3 text-[11px]">
+                <div className="flex items-center gap-2 text-slate-700">
+                  <span className="font-bold text-slate-900 flex items-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
+                    Balanced Inventory Equation:
+                  </span>
+                  <code className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200 font-bold text-blue-950">
+                    Physical Total = Available For Sale + Damaged Clothes
+                  </code>
+                </div>
+                <div className="text-slate-500 flex items-center gap-3">
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Sound &amp; on Display
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" /> Approved Damage
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> Pending Hold
+                  </span>
+                </div>
+              </div>
+
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
@@ -1004,9 +1107,9 @@ export const OwnerDashboardShell: React.FC = () => {
                       <th className="py-3 px-4">Category</th>
                       <th className="py-3 px-4 text-right">Selling Price</th>
                       <th className="py-3 px-4 text-center">Low Stock Alert</th>
-                      <th className="py-3 px-4 text-center">Physical Count</th>
-                      <th className="py-3 px-4 text-center">Damage Reservation</th>
-                      <th className="py-3 px-4 text-center font-bold text-slate-900">Sellable Available</th>
+                      <th className="py-3 px-4 text-center" title="Total physical stock = Available For Sale + Damaged Clothes">Physical Total</th>
+                      <th className="py-3 px-4 text-center" title="Approved damaged clothes + pending damage reservations">Damaged Clothes</th>
+                      <th className="py-3 px-4 text-center font-bold text-slate-900" title="Sound garments ready on display for customer purchase">Available For Sale</th>
                       <th className="py-3 px-4 text-center">Status</th>
                       <th className="py-3 px-4 text-center">Action</th>
                     </tr>
@@ -1036,16 +1139,58 @@ export const OwnerDashboardShell: React.FC = () => {
                           &le; {sec.low_stock_threshold} pcs
                         </td>
                         <td className="py-3.5 px-4 text-center font-bold text-slate-900">
-                          {sec.physical_stock}
+                          {sec.total_physical_stock ?? (sec.available_stock + (sec.total_damaged_stock || (sec.approved_damage_stock || 0) + (sec.reserved_stock || 0)))}
                         </td>
                         <td className="py-3.5 px-4 text-center">
-                          {sec.reserved_stock > 0 ? (
-                            <span className="px-2 py-0.5 bg-amber-100 text-amber-900 font-semibold rounded-full text-[10px]">
-                              {sec.reserved_stock} reserved
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">0</span>
-                          )}
+                          {(() => {
+                            const pending = sec.reserved_stock || 0;
+                            const approved = sec.approved_damage_stock || 0;
+                            const totalDamaged = sec.total_damaged_stock ?? (pending + approved);
+
+                            if (totalDamaged === 0) {
+                              return <span className="text-slate-400 font-medium">0</span>;
+                            }
+
+                            if (pending > 0 && approved > 0) {
+                              return (
+                                <div className="inline-flex flex-col items-center gap-1">
+                                  <span className="font-extrabold text-slate-900 text-[11px]">
+                                    {totalDamaged} damaged
+                                  </span>
+                                  <div className="flex items-center gap-1 text-[9px]">
+                                    <span className="px-1.5 py-0.5 bg-rose-100 text-rose-800 font-bold rounded" title={`${approved} approved write-off`}>
+                                      {approved} approved
+                                    </span>
+                                    <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 font-semibold rounded" title={`${pending} pending reservation`}>
+                                      {pending} reserved
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            if (approved > 0) {
+                              return (
+                                <span
+                                  className="px-2.5 py-1 bg-rose-50 text-rose-800 border border-rose-200 font-bold rounded-full text-[10px] inline-flex items-center gap-1"
+                                  title={`${approved} garment(s) approved as damaged write-offs`}
+                                >
+                                  <ShieldCheck className="w-3 h-3 text-rose-600 shrink-0" />
+                                  <span>{approved} approved</span>
+                                </span>
+                              );
+                            }
+
+                            return (
+                              <span
+                                className="px-2 py-0.5 bg-amber-100 text-amber-800 font-semibold rounded-full text-[10px] inline-flex items-center gap-1"
+                                title={`${pending} garment(s) pending damage review`}
+                              >
+                                <AlertTriangle className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                                <span>{pending} reserved</span>
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td className="py-3.5 px-4 text-center">
                           <span

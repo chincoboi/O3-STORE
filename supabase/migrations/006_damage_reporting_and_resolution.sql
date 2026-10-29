@@ -567,6 +567,7 @@ SELECT
   s.created_at,
   s.updated_at,
   COALESCE(m.physical_stock, 0)::INT AS physical_stock,
+  (GREATEST(0, (COALESCE(m.physical_stock, 0) - COALESCE(d.reserved_stock, 0))) + COALESCE(d.approved_damage_stock, 0) + COALESCE(d.reserved_stock, 0))::INT AS total_physical_stock,
   COALESCE(d.reserved_stock, 0)::INT AS reserved_stock,
   COALESCE(d.approved_damage_stock, 0)::INT AS approved_damage_stock,
   COALESCE(d.total_damaged_stock, 0)::INT AS total_damaged_stock,
