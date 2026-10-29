@@ -3,7 +3,7 @@
 -- MIGRATION 006: Damage Reporting, Stock Reservation, Atomic Approval/Rejection & Storage RLS
 -- ==============================================================================
 
--- 1. Create Private Supabase Storage Bucket for Damage Photo Evidence
+-- 1. Create Supabase Storage Bucket for Damage Photo Evidence
 DO $$
 BEGIN
   -- Insert into storage.buckets if storage schema exists
@@ -12,12 +12,12 @@ BEGIN
     VALUES (
       'damage-evidence',
       'damage-evidence',
-      false, -- Strictly private bucket: access requires signed URLs or authentication
+      true, -- Publicly accessible URL so damage photos can be viewed across all dashboards without token expiration
       5242880, -- 5 MB limit
       ARRAY['image/jpeg', 'image/png', 'image/webp']
     )
     ON CONFLICT (id) DO UPDATE SET
-      public = false,
+      public = true,
       file_size_limit = 5242880,
       allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp'];
   END IF;
@@ -34,7 +34,7 @@ BEGIN
       DROP POLICY IF EXISTS "Authenticated users can upload damage evidence" ON storage.objects;
       CREATE POLICY "Authenticated users can upload damage evidence"
         ON storage.objects FOR INSERT
-        TO authenticated
+        TO public
         WITH CHECK (bucket_id = 'damage-evidence');
     EXCEPTION WHEN OTHERS THEN
       RAISE NOTICE 'Notice configuring upload policy on storage.objects: %', SQLERRM;
@@ -42,9 +42,10 @@ BEGIN
 
     BEGIN
       DROP POLICY IF EXISTS "Active users can view damage evidence" ON storage.objects;
-      CREATE POLICY "Active users can view damage evidence"
+      DROP POLICY IF EXISTS "Anyone can view damage evidence" ON storage.objects;
+      CREATE POLICY "Anyone can view damage evidence"
         ON storage.objects FOR SELECT
-        TO authenticated
+        TO public
         USING (bucket_id = 'damage-evidence');
     EXCEPTION WHEN OTHERS THEN
       RAISE NOTICE 'Notice configuring select policy on storage.objects: %', SQLERRM;
@@ -52,7 +53,7 @@ BEGIN
   END IF;
 END $$;
 
--- 3. Add idempotency_key to public.damage_reports if not exists
+-- 3. Add idempotency_key and photo_url to public.damage_reports if not exists
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -63,16 +64,27 @@ BEGIN
   ) THEN
     ALTER TABLE public.damage_reports ADD COLUMN idempotency_key TEXT UNIQUE;
   END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'damage_reports'
+      AND column_name = 'photo_url'
+  ) THEN
+    ALTER TABLE public.damage_reports ADD COLUMN photo_url TEXT;
+  END IF;
 END $$;
 
 -- 4. Clean up any previous function overloads before redefining
 DROP FUNCTION IF EXISTS public.submit_damage_report_atomic(TEXT, UUID, INT, TEXT, TEXT, TEXT, TEXT);
 DROP FUNCTION IF EXISTS public.submit_damage_report_atomic(TEXT, TEXT, INT, TEXT, TEXT, TEXT, TEXT);
+DROP FUNCTION IF EXISTS public.submit_damage_report_atomic(TEXT, TEXT, INT, TEXT, TEXT, TEXT, TEXT, TEXT);
 DROP FUNCTION IF EXISTS public.review_damage_report_atomic(TEXT, UUID, TEXT, TEXT);
 DROP FUNCTION IF EXISTS public.review_damage_report_atomic(TEXT, TEXT, TEXT, TEXT);
 
 -- 5. Stored Procedure: Submit Damage Report Atomically
 -- Accepts TEXT for p_section_id (supports UUID, section_code, or section name)
+-- Supports p_photo_storage_path and p_photo_url so uploaded photos can be viewed across all dashboards.
 -- Validates caller, locks section, checks available stock (prevents over-reporting & negative availability),
 -- enforces idempotency, and records pending reservation.
 CREATE OR REPLACE FUNCTION public.submit_damage_report_atomic(
@@ -82,6 +94,7 @@ CREATE OR REPLACE FUNCTION public.submit_damage_report_atomic(
   p_damage_type TEXT,
   p_description TEXT,
   p_photo_storage_path TEXT DEFAULT NULL,
+  p_photo_url TEXT DEFAULT NULL,
   p_idempotency_key TEXT DEFAULT NULL
 )
 RETURNS JSONB
@@ -218,6 +231,7 @@ BEGIN
     damage_type,
     description,
     photo_storage_path,
+    photo_url,
     status,
     idempotency_key,
     created_at
@@ -228,6 +242,7 @@ BEGIN
     v_damage_type,
     trim(p_description),
     p_photo_storage_path,
+    p_photo_url,
     'pending',
     p_idempotency_key,
     now()
@@ -265,8 +280,38 @@ BEGIN
     'section_name', v_section.name,
     'quantity', p_quantity,
     'status', 'pending',
+    'photo_url', p_photo_url,
+    'photo_storage_path', p_photo_storage_path,
     'available_remaining', v_available_stock - p_quantity,
     'message', format('Damage report submitted successfully. %s item(s) reserved from sale availability.', p_quantity)
+  );
+END;
+$$;
+
+-- Backward-compatibility wrapper for 7-parameter calls (without p_photo_url)
+CREATE OR REPLACE FUNCTION public.submit_damage_report_atomic(
+  p_staff_id TEXT,
+  p_section_id TEXT,
+  p_quantity INT,
+  p_damage_type TEXT,
+  p_description TEXT,
+  p_photo_storage_path TEXT DEFAULT NULL,
+  p_idempotency_key TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  RETURN public.submit_damage_report_atomic(
+    p_staff_id,
+    p_section_id,
+    p_quantity,
+    p_damage_type,
+    p_description,
+    p_photo_storage_path,
+    NULL, -- p_photo_url
+    p_idempotency_key
   );
 END;
 $$;

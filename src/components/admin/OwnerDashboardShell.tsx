@@ -82,6 +82,7 @@ export const OwnerDashboardShell: React.FC = () => {
   const [photoViewerState, setPhotoViewerState] = useState<{
     isOpen: boolean;
     url?: string | null;
+    storagePath?: string | null;
     title?: string;
     subtitle?: string;
   }>({ isOpen: false });
@@ -1595,19 +1596,42 @@ export const OwnerDashboardShell: React.FC = () => {
                             {report.description}
                           </p>
 
-                          {/* Photo Evidence button */}
+                          {/* Photo Evidence button & Thumbnail */}
                           {(report.photo_url || report.photo_storage_path) && (
-                            <div className="mt-2.5">
+                            <div className="mt-2.5 flex items-center gap-2">
+                              {report.photo_url && (
+                                <div
+                                  onClick={() =>
+                                    setPhotoViewerState({
+                                      isOpen: true,
+                                      url: report.photo_url,
+                                      storagePath: report.photo_storage_path,
+                                      title: `Damage Evidence: ${report.section_name} (${report.damage_type.toUpperCase()})`,
+                                      subtitle: `Reported by ${report.staff_name} • ${report.quantity} piece(s) reserved`,
+                                    })
+                                  }
+                                  className="w-10 h-10 rounded-lg overflow-hidden border border-slate-300 bg-slate-100 cursor-pointer hover:border-[#0B193C] transition shrink-0 relative group"
+                                  title="Click to inspect photo evidence"
+                                >
+                                  <img
+                                    src={report.photo_url}
+                                    alt="Evidence thumbnail"
+                                    className="w-full h-full object-cover group-hover:scale-105 transition"
+                                  />
+                                  <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition" />
+                                </div>
+                              )}
                               <button
                                 onClick={() =>
                                   setPhotoViewerState({
                                     isOpen: true,
-                                    url: report.photo_url || report.photo_storage_path,
+                                    url: report.photo_url,
+                                    storagePath: report.photo_storage_path,
                                     title: `Damage Evidence: ${report.section_name} (${report.damage_type.toUpperCase()})`,
-                                    subtitle: `Reported by ${report.staff_name} &bull; ${report.quantity} piece(s) reserved`,
+                                    subtitle: `Reported by ${report.staff_name} • ${report.quantity} piece(s) reserved`,
                                   })
                                 }
-                                className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 transition cursor-pointer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 transition cursor-pointer"
                               >
                                 <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
                                 <span>Inspect Photo Evidence</span>
@@ -2092,6 +2116,7 @@ export const OwnerDashboardShell: React.FC = () => {
         <PhotoViewerModal
           isOpen={photoViewerState.isOpen}
           imageUrl={photoViewerState.url}
+          storagePath={photoViewerState.storagePath}
           title={photoViewerState.title}
           subtitle={photoViewerState.subtitle}
           onClose={() => setPhotoViewerState({ isOpen: false })}

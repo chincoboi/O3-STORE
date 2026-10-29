@@ -52,6 +52,7 @@ export const StaffDashboardShell: React.FC = () => {
   const [photoViewerState, setPhotoViewerState] = useState<{
     isOpen: boolean;
     url?: string | null;
+    storagePath?: string | null;
     title?: string;
     subtitle?: string;
   }>({ isOpen: false });
@@ -754,22 +755,47 @@ export const StaffDashboardShell: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Photo Evidence button */}
+                    {/* Photo Evidence button & Thumbnail */}
                     {(report.photo_url || report.photo_storage_path) && (
-                      <button
-                        onClick={() =>
-                          setPhotoViewerState({
-                            isOpen: true,
-                            url: report.photo_url || report.photo_storage_path,
-                            title: `Evidence: ${report.section_name} (${report.damage_type.toUpperCase()})`,
-                            subtitle: `Reported by ${report.staff_name} &bull; ${report.quantity} piece(s) held`,
-                          })
-                        }
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 transition cursor-pointer shrink-0"
-                      >
-                        <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
-                        <span>View Photo</span>
-                      </button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {report.photo_url && (
+                          <div
+                            onClick={() =>
+                              setPhotoViewerState({
+                                isOpen: true,
+                                url: report.photo_url,
+                                storagePath: report.photo_storage_path,
+                                title: `Evidence: ${report.section_name} (${report.damage_type.toUpperCase()})`,
+                                subtitle: `Reported by ${report.staff_name} • ${report.quantity} piece(s) held`,
+                              })
+                            }
+                            className="w-10 h-10 rounded-lg overflow-hidden border border-slate-300 bg-slate-100 cursor-pointer hover:border-[#0B193C] transition shrink-0 relative group"
+                            title="Click to view full photo evidence"
+                          >
+                            <img
+                              src={report.photo_url}
+                              alt="Thumbnail"
+                              className="w-full h-full object-cover group-hover:scale-105 transition"
+                            />
+                            <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition" />
+                          </div>
+                        )}
+                        <button
+                          onClick={() =>
+                            setPhotoViewerState({
+                              isOpen: true,
+                              url: report.photo_url,
+                              storagePath: report.photo_storage_path,
+                              title: `Evidence: ${report.section_name} (${report.damage_type.toUpperCase()})`,
+                              subtitle: `Reported by ${report.staff_name} • ${report.quantity} piece(s) held`,
+                            })
+                          }
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 transition cursor-pointer shrink-0"
+                        >
+                          <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
+                          <span>View Photo</span>
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
@@ -903,6 +929,7 @@ export const StaffDashboardShell: React.FC = () => {
         <PhotoViewerModal
           isOpen={photoViewerState.isOpen}
           imageUrl={photoViewerState.url}
+          storagePath={photoViewerState.storagePath}
           title={photoViewerState.title}
           subtitle={photoViewerState.subtitle}
           onClose={() => setPhotoViewerState({ isOpen: false })}

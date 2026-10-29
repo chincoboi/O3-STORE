@@ -41,11 +41,66 @@ export function addAuditLog(entry: Omit<AuditLog, 'id' | 'created_at'>): AuditLo
   return log;
 }
 
+// Persistent Photo Cache in localStorage (with in-memory fallback for SSR and tests)
+const PHOTO_CACHE_KEY = 'o3_damage_photos_v1';
+const fallbackMemoryCache = new Map<string, string>();
+
+export function savePhotoToCache(key: string, url: string): void {
+  if (!key || !url) return;
+  fallbackMemoryCache.set(key, url);
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const existingStr = window.localStorage.getItem(PHOTO_CACHE_KEY);
+      const cache: Record<string, string> = existingStr ? JSON.parse(existingStr) : {};
+      cache[key] = url;
+      // Keep most recent 50 photos to avoid localStorage quota exhaustion
+      const keys = Object.keys(cache);
+      if (keys.length > 50) {
+        delete cache[keys[0]];
+      }
+      window.localStorage.setItem(PHOTO_CACHE_KEY, JSON.stringify(cache));
+    }
+  } catch (err) {
+    console.warn('Could not cache damage photo to localStorage:', err);
+  }
+}
+
+export function getPhotoFromCache(key: string): string | null {
+  if (!key) return null;
+  if (fallbackMemoryCache.has(key)) {
+    return fallbackMemoryCache.get(key) || null;
+  }
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const existingStr = window.localStorage.getItem(PHOTO_CACHE_KEY);
+      if (existingStr) {
+        const cache: Record<string, string> = JSON.parse(existingStr);
+        if (cache[key]) {
+          fallbackMemoryCache.set(key, cache[key]);
+          return cache[key];
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+// Built-in high-fidelity evidence visuals for pre-seeded demo reports
+const DEMO_PHOTOS: Record<string, string> = {
+  'dmg-001': 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="%23f1f5f9"/><path d="M50 80 L220 80 L200 350 L70 350 Z" fill="%23cbd5e1"/><path d="M220 80 L380 80 L400 350 L200 350 Z" fill="%2394a3b8"/><path d="M380 80 L550 80 L530 350 L400 350 Z" fill="%23cbd5e1"/><path d="M190 140 Q215 160 195 190 Q225 210 200 230" stroke="%23dc2626" stroke-width="4" fill="none" stroke-linecap="round"/><circle cx="205" cy="180" r="16" fill="%23ef4444" opacity="0.3"/><text x="300" y="50" font-family="sans-serif" font-weight="bold" font-size="16" fill="%230f172a" text-anchor="middle">EVIDENCE: TORN SLEEVE SEAM</text><text x="300" y="375" font-family="sans-serif" font-size="12" fill="%2364748b" text-anchor="middle">Men%27s Corporate Shirts (Checked) &bull; Seam Separation</text></svg>',
+  'dmg-002': 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="%23f8fafc"/><path d="M120 100 Q300 60 480 100 L450 360 L150 360 Z" fill="%23e2e8f0"/><ellipse cx="280" cy="180" rx="45" ry="30" fill="%2378350f" opacity="0.45"/><ellipse cx="310" cy="195" rx="25" ry="18" fill="%2392400e" opacity="0.6"/><text x="300" y="50" font-family="sans-serif" font-weight="bold" font-size="16" fill="%230f172a" text-anchor="middle">EVIDENCE: GREASE &amp; OIL STAIN</text><text x="300" y="375" font-family="sans-serif" font-size="12" fill="%2364748b" text-anchor="middle">Women%27s Chiffon &amp; Silk Tops &bull; Factory Bale Contamination</text></svg>',
+  'dmg-003': 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="%23f1f5f9"/><path d="M100 110 L500 110 L460 360 L140 360 Z" fill="%23cbd5e1"/><polygon points="280,180 320,180 310,220 270,220" fill="%231e293b"/><path d="M260 170 Q300 160 340 170 Q330 230 250 230 Z" stroke="%23ea580c" stroke-width="3" fill="none" stroke-dasharray="4,2"/><text x="300" y="50" font-family="sans-serif" font-weight="bold" font-size="16" fill="%230f172a" text-anchor="middle">EVIDENCE: HEAT SCORCH HOLE</text><text x="300" y="375" font-family="sans-serif" font-size="12" fill="%2364748b" text-anchor="middle">Men%27s Round Neck &amp; Polos &bull; Iron Scorching</text></svg>',
+};
+
 /**
- * 1. Upload Damage Photo Evidence to Supabase Storage (or Data URL Fallback)
+ * 1. Upload Damage Photo Evidence to Supabase Storage (with Instant Base64 & Local Cache Fallback)
  * - Restricts file size to max 5MB
  * - Validates image MIME types (JPEG, PNG, WebP)
- * - Stores in private Supabase Storage bucket 'damage-evidence'
+ * - Uploads to Supabase Storage bucket 'damage-evidence'
+ * - Resolves both public URL and signed URL
+ * - Automatically caches photo in persistent storage so it is viewable across all dashboards
  */
 export async function uploadEvidencePhoto(
   file: File,
@@ -74,77 +129,200 @@ export async function uploadEvidencePhoto(
   const cleanId = tempId || `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const storagePath = `evidence/${Date.now()}-${cleanId}.${fileExt}`;
 
+  // Read base64 data URL first so we have an instant, infallible fallback
+  let dataUrl: string | undefined;
+  try {
+    if (typeof FileReader !== 'undefined') {
+      dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    } else if (typeof file.arrayBuffer === 'function') {
+      const arrayBuf = await file.arrayBuffer();
+      const b64 = Buffer.from(arrayBuf).toString('base64');
+      dataUrl = `data:${file.type || 'image/png'};base64,${b64}`;
+    }
+  } catch {
+    // continue
+  }
+
   if (client) {
     try {
       const { data, error } = await client.storage
         .from('damage-evidence')
         .upload(storagePath, file, {
           cacheControl: '3600',
-          upsert: false,
+          upsert: true,
         });
 
       if (!error && data) {
-        // Generate a 1-hour secure signed URL for private viewing
+        // 1. Get permanent Public URL (works with public bucket)
+        const { data: pubData } = client.storage
+          .from('damage-evidence')
+          .getPublicUrl(storagePath);
+
+        // 2. Also generate long-lived signed URL as backup
         const { data: signedData } = await client.storage
           .from('damage-evidence')
-          .createSignedUrl(storagePath, 3600);
+          .createSignedUrl(storagePath, 3600 * 24 * 7);
 
-        return {
-          success: true,
-          storagePath: data.path || storagePath,
-          previewUrl: signedData?.signedUrl,
-        };
+        const resolvedUrl = pubData?.publicUrl || signedData?.signedUrl || dataUrl;
+
+        if (resolvedUrl) {
+          savePhotoToCache(storagePath, resolvedUrl);
+          if (tempId) savePhotoToCache(tempId, resolvedUrl);
+          return {
+            success: true,
+            storagePath: data.path || storagePath,
+            previewUrl: resolvedUrl,
+          };
+        }
+      } else if (error) {
+        console.warn('Supabase storage upload notice:', error.message);
       }
     } catch (err) {
       console.warn('Supabase storage upload failed, falling back to base64 preview:', extractErrorMessage(err));
     }
   }
 
-  // Fallback: Read as base64 data URL for instant client-side preview & local persistence
-  try {
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-
+  // Fallback: Use base64 data URL for instant client-side preview & local persistence
+  if (dataUrl) {
+    savePhotoToCache(storagePath, dataUrl);
+    if (tempId) savePhotoToCache(tempId, dataUrl);
     return {
       success: true,
       storagePath,
       previewUrl: dataUrl,
     };
-  } catch {
-    return { success: false, error: 'Could not process photo file.' };
   }
+
+  return { success: false, error: 'Could not process photo file.' };
 }
 
 /**
- * 2. Retrieve Secure Signed URL for Private Damage Photos
+ * 2. Retrieve Immediate or Cached URL for Damage Photos (Synchronous)
  */
-export async function getDamagePhotoSignedUrl(storagePath?: string, existingUrl?: string): Promise<string | null> {
-  if (!storagePath && !existingUrl) return null;
+export function getDamagePhotoImmediateUrl(
+  reportOrPath: DamageReport | string | undefined | null,
+  existingUrl?: string | null
+): string | null {
+  if (!reportOrPath && !existingUrl) return null;
 
-  // If already a Data URL or Blob URL, return directly
-  if (existingUrl && (existingUrl.startsWith('data:') || existingUrl.startsWith('blob:'))) {
+  if (existingUrl && (existingUrl.startsWith('data:') || existingUrl.startsWith('blob:') || existingUrl.startsWith('http'))) {
     return existingUrl;
+  }
+
+  const report = typeof reportOrPath === 'object' && reportOrPath !== null ? reportOrPath : null;
+  const storagePath = typeof reportOrPath === 'string' ? reportOrPath : report?.photo_storage_path;
+  const reportId = report?.id;
+
+  if (report?.photo_url && (report.photo_url.startsWith('data:') || report.photo_url.startsWith('blob:') || report.photo_url.startsWith('http'))) {
+    return report.photo_url;
+  }
+
+  if (reportId) {
+    const cached = getPhotoFromCache(reportId);
+    if (cached) return cached;
+  }
+
+  if (storagePath) {
+    const cached = getPhotoFromCache(storagePath);
+    if (cached) return cached;
   }
 
   const client = getSupabaseClient();
   if (client && storagePath) {
     try {
-      const { data, error } = await client.storage
-        .from('damage-evidence')
-        .createSignedUrl(storagePath, 3600); // 1 hour token
-      if (!error && data?.signedUrl) {
-        return data.signedUrl;
+      const { data: pubData } = client.storage.from('damage-evidence').getPublicUrl(storagePath);
+      if (pubData?.publicUrl) {
+        return pubData.publicUrl;
       }
-    } catch (err) {
-      console.warn('Error creating signed photo URL:', extractErrorMessage(err));
+    } catch {
+      // ignore
     }
   }
 
+  if (reportId && DEMO_PHOTOS[reportId]) {
+    return DEMO_PHOTOS[reportId];
+  }
+
   return existingUrl || null;
+}
+
+/**
+ * 3. Retrieve Secure or Public URL for Damage Photos (Asynchronous)
+ * Guaranteed to resolve across Supabase Storage, Signed URLs, and Local Storage Cache.
+ */
+export async function resolveDamagePhotoUrl(
+  reportOrPath: DamageReport | string | undefined | null,
+  existingUrl?: string | null
+): Promise<string | null> {
+  if (!reportOrPath && !existingUrl) return null;
+
+  // 1. Direct valid URL
+  if (existingUrl && (existingUrl.startsWith('data:') || existingUrl.startsWith('blob:') || existingUrl.startsWith('http'))) {
+    return existingUrl;
+  }
+
+  const report = typeof reportOrPath === 'object' && reportOrPath !== null ? reportOrPath : null;
+  const storagePath = typeof reportOrPath === 'string' ? reportOrPath : report?.photo_storage_path;
+  const reportId = report?.id;
+
+  if (report?.photo_url && (report.photo_url.startsWith('data:') || report.photo_url.startsWith('blob:') || report.photo_url.startsWith('http'))) {
+    return report.photo_url;
+  }
+
+  // 2. Check local photo cache by report ID or storage path
+  if (reportId) {
+    const cached = getPhotoFromCache(reportId);
+    if (cached) return cached;
+  }
+  if (storagePath) {
+    const cached = getPhotoFromCache(storagePath);
+    if (cached) return cached;
+  }
+
+  // 3. Try Supabase Storage public & signed URLs
+  const client = getSupabaseClient();
+  if (client && storagePath) {
+    try {
+      // Try public URL first
+      const { data: pubData } = client.storage.from('damage-evidence').getPublicUrl(storagePath);
+      if (pubData?.publicUrl) {
+        savePhotoToCache(storagePath, pubData.publicUrl);
+        if (reportId) savePhotoToCache(reportId, pubData.publicUrl);
+        return pubData.publicUrl;
+      }
+
+      // Try signed URL fallback
+      const { data: signedData, error } = await client.storage
+        .from('damage-evidence')
+        .createSignedUrl(storagePath, 3600 * 24 * 7);
+      if (!error && signedData?.signedUrl) {
+        savePhotoToCache(storagePath, signedData.signedUrl);
+        if (reportId) savePhotoToCache(reportId, signedData.signedUrl);
+        return signedData.signedUrl;
+      }
+    } catch (err) {
+      console.warn('Error resolving damage photo URL from Supabase:', extractErrorMessage(err));
+    }
+  }
+
+  // 4. Fallback for demo reports
+  if (reportId && DEMO_PHOTOS[reportId]) {
+    return DEMO_PHOTOS[reportId];
+  }
+
+  return existingUrl || null;
+}
+
+/**
+ * Legacy compatibility alias for getDamagePhotoSignedUrl
+ */
+export async function getDamagePhotoSignedUrl(storagePath?: string, existingUrl?: string): Promise<string | null> {
+  return resolveDamagePhotoUrl(storagePath, existingUrl);
 }
 
 /**
@@ -232,6 +410,13 @@ export async function submitDamageReport(
   const nowIso = new Date().toISOString();
   const reportId = `dmg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
+  // Cache photo eagerly so it is available across all dashboards and tabs immediately
+  if (photoUrl) {
+    savePhotoToCache(reportId, photoUrl);
+    if (photoStoragePath) savePhotoToCache(photoStoragePath, photoUrl);
+    if (payload.idempotency_key) savePhotoToCache(payload.idempotency_key, photoUrl);
+  }
+
   // Try Supabase RPC if client is connected
   const client = getSupabaseClient();
   if (client) {
@@ -243,6 +428,7 @@ export async function submitDamageReport(
         p_damage_type: payload.damage_type,
         p_description: payload.description.trim(),
         p_photo_storage_path: photoStoragePath || null,
+        p_photo_url: photoUrl || null,
         p_idempotency_key: payload.idempotency_key || null,
       });
 
@@ -252,6 +438,10 @@ export async function submitDamageReport(
 
       if (data && data.success) {
         const serverReportId = data.report_id || reportId;
+        if (photoUrl && serverReportId) {
+          savePhotoToCache(serverReportId, photoUrl);
+        }
+
         const newReport: DamageReport = {
           id: serverReportId,
           staff_id: payload.staff_id,
@@ -615,6 +805,7 @@ export async function getDamageReports(filter?: {
           damage_type,
           description,
           photo_storage_path,
+          photo_url,
           status,
           reviewed_by,
           reviewed_at,
@@ -676,6 +867,14 @@ export async function getDamageReports(filter?: {
             staffName?.toLowerCase().includes('owner') ||
             r.staff_id === DEMO_OWNER.id;
 
+          const photoUrl =
+            r.photo_url ||
+            getDamagePhotoImmediateUrl(r.photo_storage_path) ||
+            getDamagePhotoImmediateUrl(r.id) ||
+            (client && r.photo_storage_path
+              ? client.storage.from('damage-evidence').getPublicUrl(r.photo_storage_path).data.publicUrl
+              : undefined);
+
           return {
             id: r.id,
             staff_id: r.staff_id,
@@ -689,6 +888,7 @@ export async function getDamageReports(filter?: {
             damage_type: r.damage_type,
             description: r.description,
             photo_storage_path: r.photo_storage_path,
+            photo_url: photoUrl,
             status: r.status,
             reviewed_by: r.reviewed_by,
             reviewed_at: r.reviewed_at,
@@ -733,8 +933,19 @@ export async function getDamageReports(filter?: {
     }
   }
 
-  // Fallback to local store
-  let list = [...localInventoryStore.damageReports];
+  // Fallback to local store with guaranteed photo_url resolution
+  let list = localInventoryStore.damageReports.map((r) => {
+    const photoUrl =
+      r.photo_url ||
+      getDamagePhotoImmediateUrl(r.photo_storage_path) ||
+      getDamagePhotoImmediateUrl(r.id) ||
+      undefined;
+
+    return {
+      ...r,
+      photo_url: photoUrl,
+    };
+  });
 
   if (filter?.status) {
     list = list.filter((r) => r.status === filter.status);

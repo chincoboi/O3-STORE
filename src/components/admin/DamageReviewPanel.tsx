@@ -20,6 +20,8 @@ import { formatDateTime } from '../../lib/formatters';
 import { reviewDamageReport } from '../../lib/damageService';
 import { extractErrorMessage } from '../../lib/inventoryService';
 
+import { PhotoViewerModal } from '../common/PhotoViewerModal';
+
 interface DamageReviewPanelProps {
   damageReports: DamageReport[];
   sections: StockSection[];
@@ -57,7 +59,13 @@ export const DamageReviewPanel: React.FC<DamageReviewPanelProps> = ({
   const [approvingReportId, setApprovingReportId] = useState<string | null>(null);
 
   // Photo Lightbox modal state
-  const [activePhotoUrl, setActivePhotoUrl] = useState<string | null>(null);
+  const [photoViewerState, setPhotoViewerState] = useState<{
+    isOpen: boolean;
+    url?: string | null;
+    storagePath?: string | null;
+    title?: string;
+    subtitle?: string;
+  }>({ isOpen: false });
 
   // Calculate status counts
   const pendingCount = damageReports.filter((r) => r.status === 'pending').length;
@@ -344,8 +352,16 @@ export const DamageReviewPanel: React.FC<DamageReviewPanelProps> = ({
                   {/* Photo Preview Thumbnail */}
                   {report.photo_url || report.photo_storage_path ? (
                     <div
-                      onClick={() => setActivePhotoUrl(report.photo_url || null)}
-                      className="relative group cursor-pointer rounded-xl overflow-hidden border border-slate-300 w-16 h-16 bg-slate-100 flex items-center justify-center shrink-0"
+                      onClick={() =>
+                        setPhotoViewerState({
+                          isOpen: true,
+                          url: report.photo_url,
+                          storagePath: report.photo_storage_path,
+                          title: `Damage Evidence: ${report.section_name} (${report.damage_type.toUpperCase()})`,
+                          subtitle: `Reported by ${report.staff_name} • ${report.quantity} piece(s) held`,
+                        })
+                      }
+                      className="relative group cursor-pointer rounded-xl overflow-hidden border border-slate-300 w-16 h-16 bg-slate-100 flex items-center justify-center shrink-0 hover:border-[#0B193C] transition"
                       title="Click to view full photo evidence"
                     >
                       {report.photo_url ? (
@@ -355,8 +371,9 @@ export const DamageReviewPanel: React.FC<DamageReviewPanelProps> = ({
                           className="w-full h-full object-cover group-hover:scale-105 transition"
                         />
                       ) : (
-                        <div className="text-[10px] text-slate-500 text-center font-semibold p-1">
-                          Photo Evidence
+                        <div className="flex flex-col items-center justify-center text-slate-500 p-1 text-center">
+                          <Eye className="w-4 h-4 text-slate-400 group-hover:text-[#0B193C] transition" />
+                          <span className="text-[9px] font-semibold mt-0.5">View Photo</span>
                         </div>
                       )}
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white">
@@ -523,33 +540,15 @@ export const DamageReviewPanel: React.FC<DamageReviewPanelProps> = ({
       )}
 
       {/* PHOTO LIGHTBOX MODAL */}
-      {activePhotoUrl && (
-        <div
-          onClick={() => setActivePhotoUrl(null)}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="relative max-w-3xl max-h-[90vh] bg-white rounded-2xl overflow-hidden shadow-2xl p-2 flex flex-col"
-          >
-            <div className="flex items-center justify-between p-2 border-b border-slate-100">
-              <span className="text-xs font-bold text-slate-800">Damage Photo Evidence</span>
-              <button
-                onClick={() => setActivePhotoUrl(null)}
-                className="p-1 text-slate-500 hover:text-slate-800 rounded-lg hover:bg-slate-100 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="p-2 overflow-auto flex items-center justify-center max-h-[80vh]">
-              <img
-                src={activePhotoUrl}
-                alt="Full damage evidence"
-                className="max-h-[75vh] w-auto object-contain rounded-xl"
-              />
-            </div>
-          </div>
-        </div>
+      {photoViewerState.isOpen && (
+        <PhotoViewerModal
+          isOpen={photoViewerState.isOpen}
+          imageUrl={photoViewerState.url}
+          storagePath={photoViewerState.storagePath}
+          title={photoViewerState.title}
+          subtitle={photoViewerState.subtitle}
+          onClose={() => setPhotoViewerState({ isOpen: false })}
+        />
       )}
     </div>
   );

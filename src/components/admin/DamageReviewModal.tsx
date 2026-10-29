@@ -17,7 +17,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { DamageReport, StockSection } from '../../types/database';
-import { reviewDamageReport, getDamagePhotoSignedUrl } from '../../lib/damageService';
+import { reviewDamageReport, resolveDamagePhotoUrl, getDamagePhotoImmediateUrl } from '../../lib/damageService';
 import { formatNaira, formatDateTime } from '../../lib/formatters';
 
 interface DamageReviewModalProps {
@@ -48,17 +48,24 @@ export const DamageReviewModal: React.FC<DamageReviewModalProps> = ({
   const [resolvedPhotoUrl, setResolvedPhotoUrl] = useState<string | null>(null);
   const [isPhotoEnlarged, setIsPhotoEnlarged] = useState(false);
 
-  // Load photo signed URL if needed
+  // Load photo signed / public / cached URL
   useEffect(() => {
-    if (report?.photo_url) {
-      setResolvedPhotoUrl(report.photo_url);
-    } else if (report?.photo_storage_path) {
-      getDamagePhotoSignedUrl(report.photo_storage_path).then((url) => {
+    if (!report) {
+      setResolvedPhotoUrl(null);
+      return;
+    }
+
+    const immediate = getDamagePhotoImmediateUrl(report, report.photo_url);
+    if (immediate) {
+      setResolvedPhotoUrl(immediate);
+    } else if (report.photo_url || report.photo_storage_path) {
+      resolveDamagePhotoUrl(report, report.photo_url).then((url) => {
         if (url) setResolvedPhotoUrl(url);
       });
     } else {
       setResolvedPhotoUrl(null);
     }
+
     setActiveAction('idle');
     setRejectionReason('');
     setErrorMessage(null);
